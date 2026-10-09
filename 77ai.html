@@ -1,0 +1,103 @@
+const ALLOWED_ORIGIN = "https://YOUR-USERNAME.github.io";
+
+export default {
+  async fetch(request, env) {
+    const origin = request.headers.get("Origin") || "";
+
+    const headers = {
+      "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Vary": "Origin"
+    };
+
+    if (origin !== ALLOWED_ORIGIN) {
+      return new Response("Origin not allowed", { status: 403 });
+    }
+
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers });
+    }
+
+    if (request.method !== "POST") {
+      return Response.json(
+        { error: "Use POST to send a message." },
+        { status: 405, headers }
+      );
+    }
+
+    if (!env.OPENAI_API_KEY) {
+      return Response.json(
+        { error: "The AI API key is not configured." },
+        { status: 500, headers }
+      );
+    }
+
+    try {
+      const contentType = request.headers.get("Content-Type") || "";
+      if (!contentType.includes("application/json")) {
+        return Response.json(
+          { error: "Send a JSON request." },
+          { status: 415, headers }
+        );
+      }
+
+      const body = await request.json();
+      const message = typeof body.message === "string"
+        ? body.message.trim()
+        : "";
+
+      if (!message || message.length > 4000) {
+        return Response.json(
+          { error: "Message must contain 1–4000 characters." },
+          { status: 400, headers }
+        );
+      }
+
+      const apiResponse = await fetch(
+        "https://api.openai.com/v1/responses",
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${env.OPENAI_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "gpt-4.1-mini",
+            instructions:
+              "You are TaskHub AI, a helpful beginner-friendly tutor for an AI and Data Science student team. Help with C, Python, maths, physics, AI and data science. Explain concepts clearly with examples. Encourage learning and academic honesty. Do not claim to see the user's tasks or files unless their contents are provided.",
+            input: message,
+            max_output_tokens: 700
+          })
+        }
+      );
+
+      if (!apiResponse.ok) {
+        console.error("AI API status:", apiResponse.status);
+        return Response.json(
+          { error: "AI service error. Check API access, model access and billing." },
+          { status: 502, headers }
+        );
+      }
+
+      const result = await apiResponse.json();
+      const answer = (result.output || [])
+        .flatMap(item => item.content || [])
+        .filter(item => item.type === "output_text")
+        .map(item => item.text)
+        .join("\n")
+        .trim();
+
+      return Response.json(
+        { answer: answer || "Please try asking another question." },
+        { headers }
+      );
+    } catch (error) {
+      console.error("Worker error:", error);
+      return Response.json(
+        { error: "Request failed. Please try again." },
+        { status: 400, headers }
+      );
+    }
+  }
+};
